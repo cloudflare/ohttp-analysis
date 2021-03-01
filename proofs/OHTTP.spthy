@@ -1,0 +1,709 @@
+theory OHTTP begin
+
+// Function signature and definition of the equational theory E
+
+builtins: diffie-hellman
+functions: Expand/3, Extract/2, aead/4, aead_verify/4, decrypt/3,
+           fst/1, h/1, hmac/1, pair/2, pk/1, sdec/2, senc/2, sign/2, snd/1,
+           true/0, verify/3
+equations:
+    aead_verify(k, n, a, aead(k, n, a, p)) = true,
+    decrypt(k, n, aead(k, n, a, p)) = p,
+    fst(<x.1, x.2>) = x.1,
+    sdec(senc(x.1, x.2), x.2) = x.1,
+    snd(<x.1, x.2>) = x.2,
+    verify(sign(x.1, x.2), x.1, pk(x.2)) = true
+
+
+
+restriction Eq_check_succeed:
+  "∀ x y #i. (Eq( x, y ) @ #i) ⇒ (x = y)"
+  // safety formula
+
+restriction Neq_check_succeed:
+  "∀ x y #i. (Neq( x, y ) @ #i) ⇒ (¬(x = y))"
+  // safety formula
+
+rule (modulo E) Starter:
+   [ Fr( ~kxy ) ]
+  --[ Channel( $X, $Y ) ]->
+   [
+   KeyExC( $X, $Y, ~kxy ), KeyExS( $X, $Y, ~kxy ),
+   KeyExI( $X, $Y, ~kxy )
+   ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) Generate_DH_key_pair:
+   [ Fr( ~x ), Fr( ~key_id ) ]
+  -->
+   [
+   !Pk( $A, <~key_id, $kdf_id, $aead_id>, 'g'^~x ),
+   Out( <~key_id, 'g'^~x> ),
+   !Ltk( $A, <~key_id, $kdf_id, $aead_id>, ~x )
+   ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) C_QueryGeneration:
+   [
+   KeyExC( $C, $P, ~k ), !Pk( $T, <~key_id, kdf_id, aead_id>, gy ),
+   Fr( ~x ), Fr( ~req )
+   ]
+  --[
+  Neq( $P, $T ),
+  CQG_sources( 'g'^~x,
+               aead(Expand(Extract('blank', <'HPKE_v1', 'eae_prk', gy^~x>),
+                           <'32', 'HPKE_v1', 'shared_secret', 'g'^~x, gy>, '32'),
+                    Expand(Extract(Expand(Extract('blank',
+                                                  <'HPKE_v1', 'eae_prk', gy^~x>),
+                                          <'32', 'HPKE_v1', 'shared_secret', 'g'^~x, gy>, '32'),
+                                   <'HPKE_v1', 'secret', 'blank'>),
+                           <'32', 'HPKE_v1', 'base_nonce', '0x01', 
+                            Extract('blank', <'HPKE_v1', 'info_hash', 'request'>)>,
+                           '32'),
+                    <~key_id, kdf_id, aead_id>, ~req)
+  ),
+  C_SS( 'g'^~x, gy,
+        Expand(Extract('blank', <'HPKE_v1', 'eae_prk', gy^~x>),
+               <'32', 'HPKE_v1', 'shared_secret', 'g'^~x, gy>, '32')
+  )
+  ]->
+   [
+   Out( senc(<<~key_id, kdf_id, aead_id>, 'g'^~x, 
+              aead(Expand(Extract('blank', <'HPKE_v1', 'eae_prk', gy^~x>),
+                          <'32', 'HPKE_v1', 'shared_secret', 'g'^~x, gy>, '32'),
+                   Expand(Extract(Expand(Extract('blank',
+                                                 <'HPKE_v1', 'eae_prk', gy^~x>),
+                                         <'32', 'HPKE_v1', 'shared_secret', 'g'^~x, gy>, '32'),
+                                  <'HPKE_v1', 'secret', 'blank'>),
+                          <'32', 'HPKE_v1', 'base_nonce', '0x01', 
+                           Extract('blank', <'HPKE_v1', 'info_hash', 'request'>)>,
+                          '32'),
+                   <~key_id, kdf_id, aead_id>, ~req)
+             >,
+             ~k)
+   ),
+   C_ResponseHandler( ~req, $C, 'g'^~x, $P, ~k, $T, gy,
+                      Expand(Extract('blank', <'HPKE_v1', 'eae_prk', gy^~x>),
+                             <'32', 'HPKE_v1', 'shared_secret', 'g'^~x, gy>, '32')
+   )
+   ]
+
+  /*
+  rule (modulo AC) C_QueryGeneration:
+     [
+     KeyExC( $C, $P, ~k ), !Pk( $T, <~key_id, kdf_id, aead_id>, gy ),
+     Fr( ~x ), Fr( ~req )
+     ]
+    --[
+    Neq( $P, $T ),
+    CQG_sources( 'g'^~x,
+                 aead(Expand(Extract('blank', <'HPKE_v1', 'eae_prk', z>),
+                             <'32', 'HPKE_v1', 'shared_secret', 'g'^~x, gy>, '32'),
+                      Expand(Extract(Expand(Extract('blank', <'HPKE_v1', 'eae_prk', z>),
+                                            <'32', 'HPKE_v1', 'shared_secret', 'g'^~x, gy>, '32'),
+                                     <'HPKE_v1', 'secret', 'blank'>),
+                             <'32', 'HPKE_v1', 'base_nonce', '0x01', 
+                              Extract('blank', <'HPKE_v1', 'info_hash', 'request'>)>,
+                             '32'),
+                      <~key_id, kdf_id, aead_id>, ~req)
+    ),
+    C_SS( 'g'^~x, gy,
+          Expand(Extract('blank', <'HPKE_v1', 'eae_prk', z>),
+                 <'32', 'HPKE_v1', 'shared_secret', 'g'^~x, gy>, '32')
+    )
+    ]->
+     [
+     Out( senc(<<~key_id, kdf_id, aead_id>, 'g'^~x, 
+                aead(Expand(Extract('blank', <'HPKE_v1', 'eae_prk', z>),
+                            <'32', 'HPKE_v1', 'shared_secret', 'g'^~x, gy>, '32'),
+                     Expand(Extract(Expand(Extract('blank', <'HPKE_v1', 'eae_prk', z>),
+                                           <'32', 'HPKE_v1', 'shared_secret', 'g'^~x, gy>, '32'),
+                                    <'HPKE_v1', 'secret', 'blank'>),
+                            <'32', 'HPKE_v1', 'base_nonce', '0x01', 
+                             Extract('blank', <'HPKE_v1', 'info_hash', 'request'>)>,
+                            '32'),
+                     <~key_id, kdf_id, aead_id>, ~req)
+               >,
+               ~k)
+     ),
+     C_ResponseHandler( ~req, $C, 'g'^~x, $P, ~k, $T, gy,
+                        Expand(Extract('blank', <'HPKE_v1', 'eae_prk', z>),
+                               <'32', 'HPKE_v1', 'shared_secret', 'g'^~x, gy>, '32')
+     )
+     ]
+    variants (modulo AC)
+    1. ~x    = ~x.19
+       gy    = gy.21
+       z     = gy.21^~x.19
+    
+    2. ~x    = ~x.25
+       gy    = z.33^inv(~x.25)
+       z     = z.33
+    
+    3. ~x    = ~x.245
+       gy    = x.481^x.482
+       z     = x.481^(~x.245*x.482)
+    
+    4. ~x    = ~x.247
+       gy    = x.485^inv((~x.247*x.486))
+       z     = x.485^inv(x.486)
+    
+    5. ~x    = ~x.247
+       gy    = x.485^(x.486*inv(~x.247))
+       z     = x.485^x.486
+    
+    6. ~x    = ~x.248
+       gy    = x.486^(x.487*inv((~x.248*x.488)))
+       z     = x.486^(x.487*inv(x.488))
+  */
+
+rule (modulo E) P_HandleQuery:
+   [
+   KeyExS( $C, $P, ~k ),
+   In( senc(<<key_id, kdf_id, aead_id>, gx, opaque>, ~k) ),
+   !Pk( $T, <key_id, kdf_id, aead_id>, gy ), Fr( ~ptid )
+   ]
+  --[ PHQ( gx, opaque ) ]->
+   [
+   Out( <$T, <key_id, kdf_id, aead_id>, gx, opaque> ),
+   P_ResponseHandler( ~ptid, $C, $P, ~k )
+   ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) T_HandleQuery:
+   [
+   In( <$T, <~key_id, kdf_id, aead_id>, gx, 
+        aead(Expand(Extract('blank', <'HPKE_v1', 'eae_prk', gx^~y>),
+                    <'32', 'HPKE_v1', 'shared_secret', gx, 'g'^~y>, '32'),
+             Expand(Extract(Expand(Extract('blank',
+                                           <'HPKE_v1', 'eae_prk', gx^~y>),
+                                   <'32', 'HPKE_v1', 'shared_secret', gx, 'g'^~y>, '32'),
+                            <'HPKE_v1', 'secret', 'blank'>),
+                    <'32', 'HPKE_v1', 'base_nonce', '0x01', 
+                     Extract('blank', <'HPKE_v1', 'info_hash', 'request'>)>,
+                    '32'),
+             <~key_id, kdf_id, aead_id>, request)
+       >
+   ),
+   !Ltk( $T, <~key_id, kdf_id, aead_id>, ~y ), Fr( ~ttid ),
+   Fr( ~resp ), Fr( ~resp_nonce )
+   ]
+  --[
+  Eq( aead_verify(Expand(Extract('blank',
+                                 <'HPKE_v1', 'eae_prk', gx^~y>),
+                         <'32', 'HPKE_v1', 'shared_secret', gx, 'g'^~y>, '32'),
+                  Expand(Extract(Expand(Extract('blank',
+                                                <'HPKE_v1', 'eae_prk', gx^~y>),
+                                        <'32', 'HPKE_v1', 'shared_secret', gx, 'g'^~y>, '32'),
+                                 <'HPKE_v1', 'secret', 'blank'>),
+                         <'32', 'HPKE_v1', 'base_nonce', '0x01', 
+                          Extract('blank', <'HPKE_v1', 'info_hash', 'request'>)>,
+                         '32'),
+                  <~key_id, kdf_id, aead_id>,
+                  aead(Expand(Extract('blank', <'HPKE_v1', 'eae_prk', gx^~y>),
+                              <'32', 'HPKE_v1', 'shared_secret', gx, 'g'^~y>, '32'),
+                       Expand(Extract(Expand(Extract('blank',
+                                                     <'HPKE_v1', 'eae_prk', gx^~y>),
+                                             <'32', 'HPKE_v1', 'shared_secret', gx, 'g'^~y>, '32'),
+                                      <'HPKE_v1', 'secret', 'blank'>),
+                              <'32', 'HPKE_v1', 'base_nonce', '0x01', 
+                               Extract('blank', <'HPKE_v1', 'info_hash', 'request'>)>,
+                              '32'),
+                       <~key_id, kdf_id, aead_id>, request)),
+      true
+  ),
+  T_Done( ~ttid ),
+  T_SS( gx, 'g'^~y,
+        Expand(Extract('blank', <'HPKE_v1', 'eae_prk', gx^~y>),
+               <'32', 'HPKE_v1', 'shared_secret', gx, 'g'^~y>, '32')
+  ),
+  T_Answer( $T, gx, 'g'^~y, request, ~resp )
+  ]->
+   [
+   Out( <~resp_nonce, 
+         aead(Expand(Extract(request,
+                             Expand(Expand(Extract(<
+                                                    Expand(Extract('blank',
+                                                                   <'HPKE_v1', 'eae_prk', gx^~y>),
+                                                           <'32', 'HPKE_v1', 'shared_secret', gx, 
+                                                            'g'^~y>,
+                                                           '32'), 
+                                                    ~resp_nonce>,
+                                                   <'HPKE_v1', 'secret', 'blank'>),
+                                           <'32', 'HPKE_v1', 'exp', '0x01', 
+                                            Extract('blank', <'HPKE_v1', 'info_hash', 'request'>)>,
+                                           '32'),
+                                    <'32', 'HPKE_v1', 'sec', 'blank'>, '32')),
+                     'key', '32'),
+              Expand(Extract(request,
+                             Expand(Expand(Extract(<
+                                                    Expand(Extract('blank',
+                                                                   <'HPKE_v1', 'eae_prk', gx^~y>),
+                                                           <'32', 'HPKE_v1', 'shared_secret', gx, 
+                                                            'g'^~y>,
+                                                           '32'), 
+                                                    ~resp_nonce>,
+                                                   <'HPKE_v1', 'secret', 'blank'>),
+                                           <'32', 'HPKE_v1', 'exp', '0x01', 
+                                            Extract('blank', <'HPKE_v1', 'info_hash', 'request'>)>,
+                                           '32'),
+                                    <'32', 'HPKE_v1', 'sec', 'blank'>, '32')),
+                     'nonce', '32'),
+              'blank', ~resp)
+        >
+   )
+   ]
+
+  /*
+  rule (modulo AC) T_HandleQuery:
+     [
+     In( <$T, <~key_id, kdf_id, aead_id>, gx, 
+          aead(Expand(Extract('blank', <'HPKE_v1', 'eae_prk', z>),
+                      <'32', 'HPKE_v1', 'shared_secret', gx, 'g'^~y>, '32'),
+               Expand(Extract(Expand(Extract('blank', <'HPKE_v1', 'eae_prk', z>),
+                                     <'32', 'HPKE_v1', 'shared_secret', gx, 'g'^~y>, '32'),
+                              <'HPKE_v1', 'secret', 'blank'>),
+                      <'32', 'HPKE_v1', 'base_nonce', '0x01', 
+                       Extract('blank', <'HPKE_v1', 'info_hash', 'request'>)>,
+                      '32'),
+               <~key_id, kdf_id, aead_id>, request)
+         >
+     ),
+     !Ltk( $T, <~key_id, kdf_id, aead_id>, ~y ), Fr( ~ttid ),
+     Fr( ~resp ), Fr( ~resp_nonce )
+     ]
+    --[
+    Eq( true, true ), T_Done( ~ttid ),
+    T_SS( gx, 'g'^~y,
+          Expand(Extract('blank', <'HPKE_v1', 'eae_prk', z>),
+                 <'32', 'HPKE_v1', 'shared_secret', gx, 'g'^~y>, '32')
+    ),
+    T_Answer( $T, gx, 'g'^~y, request, ~resp )
+    ]->
+     [
+     Out( <~resp_nonce, 
+           aead(Expand(Extract(request,
+                               Expand(Expand(Extract(<
+                                                      Expand(Extract('blank',
+                                                                     <'HPKE_v1', 'eae_prk', z>),
+                                                             <'32', 'HPKE_v1', 'shared_secret', gx, 
+                                                              'g'^~y>,
+                                                             '32'), 
+                                                      ~resp_nonce>,
+                                                     <'HPKE_v1', 'secret', 'blank'>),
+                                             <'32', 'HPKE_v1', 'exp', '0x01', 
+                                              Extract('blank', <'HPKE_v1', 'info_hash', 'request'>)
+                                             >,
+                                             '32'),
+                                      <'32', 'HPKE_v1', 'sec', 'blank'>, '32')),
+                       'key', '32'),
+                Expand(Extract(request,
+                               Expand(Expand(Extract(<
+                                                      Expand(Extract('blank',
+                                                                     <'HPKE_v1', 'eae_prk', z>),
+                                                             <'32', 'HPKE_v1', 'shared_secret', gx, 
+                                                              'g'^~y>,
+                                                             '32'), 
+                                                      ~resp_nonce>,
+                                                     <'HPKE_v1', 'secret', 'blank'>),
+                                             <'32', 'HPKE_v1', 'exp', '0x01', 
+                                              Extract('blank', <'HPKE_v1', 'info_hash', 'request'>)
+                                             >,
+                                             '32'),
+                                      <'32', 'HPKE_v1', 'sec', 'blank'>, '32')),
+                       'nonce', '32'),
+                'blank', ~resp)
+          >
+     )
+     ]
+    variants (modulo AC)
+    1. ~y    = ~y.18
+       gx    = gx.20
+       z     = gx.20^~y.18
+    
+    2. ~y    = ~y.24
+       gx    = z.32^inv(~y.24)
+       z     = z.32
+    
+    3. ~y    = ~y.437
+       gx    = x.866^x.867
+       z     = x.866^(~y.437*x.867)
+    
+    4. ~y    = ~y.439
+       gx    = x.870^inv((~y.439*x.871))
+       z     = x.870^inv(x.871)
+    
+    5. ~y    = ~y.439
+       gx    = x.870^(x.871*inv(~y.439))
+       z     = x.870^x.871
+    
+    6. ~y    = ~y.440
+       gx    = x.871^(x.872*inv((~y.440*x.873)))
+       z     = x.871^(x.872*inv(x.873))
+  */
+
+rule (modulo E) P_HandleResponse:
+   [ P_ResponseHandler( ~ptid, $C, $P, ~k ), In( <nonce, opaque> ) ]
+  --[ P_Done( ~ptid ) ]->
+   [ Out( senc(<nonce, opaque>, ~k) ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) C_HandleResponse:
+   [
+   C_ResponseHandler( ~request, $C, gx, $P, ~k, $T, gy, shared_secret
+   ),
+   In( senc(<response_nonce, 
+             aead(Expand(Extract(~request,
+                                 Expand(Expand(Extract(<shared_secret, response_nonce>,
+                                                       <'HPKE_v1', 'secret', 'blank'>),
+                                               <'32', 'HPKE_v1', 'exp', '0x01', 
+                                                Extract('blank',
+                                                        <'HPKE_v1', 'info_hash', 'request'>)
+                                               >,
+                                               '32'),
+                                        <'32', 'HPKE_v1', 'sec', 'blank'>, '32')),
+                         'key', '32'),
+                  Expand(Extract(~request,
+                                 Expand(Expand(Extract(<shared_secret, response_nonce>,
+                                                       <'HPKE_v1', 'secret', 'blank'>),
+                                               <'32', 'HPKE_v1', 'exp', '0x01', 
+                                                Extract('blank',
+                                                        <'HPKE_v1', 'info_hash', 'request'>)
+                                               >,
+                                               '32'),
+                                        <'32', 'HPKE_v1', 'sec', 'blank'>, '32')),
+                         'nonce', '32'),
+                  'blank', response)
+            >,
+            ~k)
+   )
+   ]
+  --[
+  C_Done( ~request, response, $C, gx, $T, gy ),
+  Eq( aead_verify(Expand(Extract(~request,
+                                 Expand(Expand(Extract(<shared_secret, response_nonce>,
+                                                       <'HPKE_v1', 'secret', 'blank'>),
+                                               <'32', 'HPKE_v1', 'exp', '0x01', 
+                                                Extract('blank',
+                                                        <'HPKE_v1', 'info_hash', 'request'>)
+                                               >,
+                                               '32'),
+                                        <'32', 'HPKE_v1', 'sec', 'blank'>, '32')),
+                         'key', '32'),
+                  Expand(Extract(~request,
+                                 Expand(Expand(Extract(<shared_secret, response_nonce>,
+                                                       <'HPKE_v1', 'secret', 'blank'>),
+                                               <'32', 'HPKE_v1', 'exp', '0x01', 
+                                                Extract('blank',
+                                                        <'HPKE_v1', 'info_hash', 'request'>)
+                                               >,
+                                               '32'),
+                                        <'32', 'HPKE_v1', 'sec', 'blank'>, '32')),
+                         'nonce', '32'),
+                  'blank',
+                  aead(Expand(Extract(~request,
+                                      Expand(Expand(Extract(<shared_secret, response_nonce>,
+                                                            <'HPKE_v1', 'secret', 'blank'>),
+                                                    <'32', 'HPKE_v1', 'exp', '0x01', 
+                                                     Extract('blank',
+                                                             <'HPKE_v1', 'info_hash', 'request'>)
+                                                    >,
+                                                    '32'),
+                                             <'32', 'HPKE_v1', 'sec', 'blank'>, '32')),
+                              'key', '32'),
+                       Expand(Extract(~request,
+                                      Expand(Expand(Extract(<shared_secret, response_nonce>,
+                                                            <'HPKE_v1', 'secret', 'blank'>),
+                                                    <'32', 'HPKE_v1', 'exp', '0x01', 
+                                                     Extract('blank',
+                                                             <'HPKE_v1', 'info_hash', 'request'>)
+                                                    >,
+                                                    '32'),
+                                             <'32', 'HPKE_v1', 'sec', 'blank'>, '32')),
+                              'nonce', '32'),
+                       'blank', response)),
+      true
+  )
+  ]->
+   [ ]
+
+  /*
+  rule (modulo AC) C_HandleResponse:
+     [
+     C_ResponseHandler( ~request, $C, gx, $P, ~k, $T, gy, shared_secret
+     ),
+     In( senc(<response_nonce, 
+               aead(Expand(Extract(~request,
+                                   Expand(Expand(Extract(<shared_secret, response_nonce>,
+                                                         <'HPKE_v1', 'secret', 'blank'>),
+                                                 <'32', 'HPKE_v1', 'exp', '0x01', 
+                                                  Extract('blank',
+                                                          <'HPKE_v1', 'info_hash', 'request'>)
+                                                 >,
+                                                 '32'),
+                                          <'32', 'HPKE_v1', 'sec', 'blank'>, '32')),
+                           'key', '32'),
+                    Expand(Extract(~request,
+                                   Expand(Expand(Extract(<shared_secret, response_nonce>,
+                                                         <'HPKE_v1', 'secret', 'blank'>),
+                                                 <'32', 'HPKE_v1', 'exp', '0x01', 
+                                                  Extract('blank',
+                                                          <'HPKE_v1', 'info_hash', 'request'>)
+                                                 >,
+                                                 '32'),
+                                          <'32', 'HPKE_v1', 'sec', 'blank'>, '32')),
+                           'nonce', '32'),
+                    'blank', response)
+              >,
+              ~k)
+     )
+     ]
+    --[ C_Done( ~request, response, $C, gx, $T, gy ), Eq( true, true )
+    ]->
+     [ ]
+  */
+
+lemma CQG_sources [sources]:
+  all-traces
+  "∀ gx op #j.
+    (PHQ( gx, op ) @ #j) ⇒
+    ((∃ #i. (CQG_sources( gx, op ) @ #i) ∧ (#i < #j)) ∨
+     ((∃ #i. (!KU( gx ) @ #i) ∧ (#i < #j)) ∧
+      (∃ #i. (!KU( op ) @ #i) ∧ (#i < #j))))"
+/*
+guarded formula characterizing all counter-examples:
+"∃ gx op #j.
+  (PHQ( gx, op ) @ #j)
+ ∧
+  (∀ #i. (CQG_sources( gx, op ) @ #i) ⇒ ¬(#i < #j)) ∧
+  (((∀ #i. (!KU( gx ) @ #i) ⇒ ¬(#i < #j)) ∨
+    (∀ #i. (!KU( op ) @ #i) ⇒ ¬(#i < #j))))"
+*/
+by sorry
+
+lemma end_to_end:
+  exists-trace
+  "∃ req resp C gx T gy #i. C_Done( req, resp, C, gx, T, gy ) @ #i"
+/*
+guarded formula characterizing all satisfying traces:
+"∃ req resp C gx T gy #i. (C_Done( req, resp, C, gx, T, gy ) @ #i)"
+*/
+simplify
+solve( C_ResponseHandler( ~request, $C, gx, $P, ~k, $T, gy,
+                          shared_secret
+       ) ▶₀ #i )
+  case C_QueryGeneration
+  solve( !KU( senc(<response_nonce, 
+                    aead(Expand(Extract(~request,
+                                        Expand(Expand(Extract(<
+                                                               Expand(Extract('blank',
+                                                                              <'HPKE_v1', 
+                                                                               'eae_prk', 
+                                                                               'g'^(~x*~x.1)>),
+                                                                      <'32', 'HPKE_v1', 
+                                                                       'shared_secret', 'g'^~x, 
+                                                                       'g'^~x.1>,
+                                                                      '32'), 
+                                                               response_nonce>,
+                                                              <'HPKE_v1', 'secret', 'blank'>),
+                                                      <'32', 'HPKE_v1', 'exp', '0x01', 
+                                                       Extract('blank',
+                                                               <'HPKE_v1', 'info_hash', 'request'>)
+                                                      >,
+                                                      '32'),
+                                               <'32', 'HPKE_v1', 'sec', 'blank'>, '32')),
+                                'key', '32'),
+                         Expand(Extract(~request,
+                                        Expand(Expand(Extract(<
+                                                               Expand(Extract('blank',
+                                                                              <'HPKE_v1', 
+                                                                               'eae_prk', 
+                                                                               'g'^(~x*~x.1)>),
+                                                                      <'32', 'HPKE_v1', 
+                                                                       'shared_secret', 'g'^~x, 
+                                                                       'g'^~x.1>,
+                                                                      '32'), 
+                                                               response_nonce>,
+                                                              <'HPKE_v1', 'secret', 'blank'>),
+                                                      <'32', 'HPKE_v1', 'exp', '0x01', 
+                                                       Extract('blank',
+                                                               <'HPKE_v1', 'info_hash', 'request'>)
+                                                      >,
+                                                      '32'),
+                                               <'32', 'HPKE_v1', 'sec', 'blank'>, '32')),
+                                'nonce', '32'),
+                         'blank', resp)
+                   >,
+                   ~k)
+         ) @ #vk )
+    case P_HandleResponse
+    solve( !KU( aead(Expand(Extract(~request,
+                                    Expand(Expand(Extract(<
+                                                           Expand(Extract('blank',
+                                                                          <'HPKE_v1', 'eae_prk', 
+                                                                           'g'^(~x*~x.1)>),
+                                                                  <'32', 'HPKE_v1', 
+                                                                   'shared_secret', 'g'^~x, 'g'^~x.1
+                                                                  >,
+                                                                  '32'), 
+                                                           response_nonce>,
+                                                          <'HPKE_v1', 'secret', 'blank'>),
+                                                  <'32', 'HPKE_v1', 'exp', '0x01', 
+                                                   Extract('blank',
+                                                           <'HPKE_v1', 'info_hash', 'request'>)
+                                                  >,
+                                                  '32'),
+                                           <'32', 'HPKE_v1', 'sec', 'blank'>, '32')),
+                            'key', '32'),
+                     Expand(Extract(~request,
+                                    Expand(Expand(Extract(<
+                                                           Expand(Extract('blank',
+                                                                          <'HPKE_v1', 'eae_prk', 
+                                                                           'g'^(~x*~x.1)>),
+                                                                  <'32', 'HPKE_v1', 
+                                                                   'shared_secret', 'g'^~x, 'g'^~x.1
+                                                                  >,
+                                                                  '32'), 
+                                                           response_nonce>,
+                                                          <'HPKE_v1', 'secret', 'blank'>),
+                                                  <'32', 'HPKE_v1', 'exp', '0x01', 
+                                                   Extract('blank',
+                                                           <'HPKE_v1', 'info_hash', 'request'>)
+                                                  >,
+                                                  '32'),
+                                           <'32', 'HPKE_v1', 'sec', 'blank'>, '32')),
+                            'nonce', '32'),
+                     'blank', resp)
+           ) @ #vk.3 )
+      case T_HandleQuery
+      solve( !KU( senc(<<~key_id.1, $kdf_id.1, $aead_id.1>, gx, opaque>,
+                       ~k)
+             ) @ #vk.4 )
+        case C_QueryGeneration
+        solve( !KU( ~key_id ) @ #vk.9 )
+          case Generate_DH_key_pair
+          solve( !KU( ~resp_nonce ) @ #vk.5 )
+            case T_HandleQuery
+            solve( !KU( 'g'^~x ) @ #vk.14 )
+              case P_HandleQuery
+              solve( !KU( senc(<<~key_id.1, $kdf_id.1, $aead_id.1>, 'g'^~x, 
+                                aead(Expand(Extract('blank',
+                                                    <'HPKE_v1', 'eae_prk', 'g'^(~x*~x.1)>),
+                                            <'32', 'HPKE_v1', 'shared_secret', 'g'^~x, 'g'^~x.1>,
+                                            '32'),
+                                     Expand(Extract(Expand(Extract('blank',
+                                                                   <'HPKE_v1', 'eae_prk', 
+                                                                    'g'^(~x*~x.1)>),
+                                                           <'32', 'HPKE_v1', 'shared_secret', 
+                                                            'g'^~x, 'g'^~x.1>,
+                                                           '32'),
+                                                    <'HPKE_v1', 'secret', 'blank'>),
+                                            <'32', 'HPKE_v1', 'base_nonce', '0x01', 
+                                             Extract('blank', <'HPKE_v1', 'info_hash', 'request'>)>,
+                                            '32'),
+                                     <~key_id, $kdf_id, $aead_id>, ~request)
+                               >,
+                               ~k.1)
+                     ) @ #vk.16 )
+                case C_QueryGeneration
+                solve( !KU( aead(Expand(Extract('blank',
+                                                <'HPKE_v1', 'eae_prk', 'g'^(~x*~x.1)>),
+                                        <'32', 'HPKE_v1', 'shared_secret', 'g'^~x, 'g'^~x.1>, '32'),
+                                 Expand(Extract(Expand(Extract('blank',
+                                                               <'HPKE_v1', 'eae_prk', 'g'^(~x*~x.1)
+                                                               >),
+                                                       <'32', 'HPKE_v1', 'shared_secret', 'g'^~x, 
+                                                        'g'^~x.1>,
+                                                       '32'),
+                                                <'HPKE_v1', 'secret', 'blank'>),
+                                        <'32', 'HPKE_v1', 'base_nonce', '0x01', 
+                                         Extract('blank', <'HPKE_v1', 'info_hash', 'request'>)>,
+                                        '32'),
+                                 <~key_id, $kdf_id, $aead_id>, ~request)
+                       ) @ #vk.15 )
+                  case P_HandleQuery
+                  SOLVED // trace found
+                qed
+              qed
+            qed
+          qed
+        qed
+      qed
+    qed
+  qed
+qed
+
+lemma ss_match:
+  all-traces
+  "∀ gx gy ss #j.
+    (T_SS( gx, gy, ss ) @ #j) ⇒
+    ((∃ #i. (C_SS( gx, gy, ss ) @ #i) ∧ (#i < #j)) ∨
+     (∃ #i. (!KU( ss ) @ #i) ∧ (#i < #j)))"
+/*
+guarded formula characterizing all counter-examples:
+"∃ gx gy ss #j.
+  (T_SS( gx, gy, ss ) @ #j)
+ ∧
+  (∀ #i. (C_SS( gx, gy, ss ) @ #i) ⇒ ¬(#i < #j)) ∧
+  (∀ #i. (!KU( ss ) @ #i) ⇒ ¬(#i < #j))"
+*/
+simplify
+solve( !Ltk( $T, <~key_id, kdf_id, aead_id>, ~y ) ▶₁ #j )
+  case Generate_DH_key_pair
+  solve( !KU( ~key_id ) @ #vk.4 )
+    case C_QueryGeneration
+    by solve( !KU( ~k ) @ #vk.11 )
+  next
+    case Generate_DH_key_pair
+    solve( !KU( aead(Expand(Extract('blank',
+                                    <'HPKE_v1', 'eae_prk', z>),
+                            <'32', 'HPKE_v1', 'shared_secret', gx, 'g'^~y>, '32'),
+                     Expand(Extract(Expand(Extract('blank', <'HPKE_v1', 'eae_prk', z>),
+                                           <'32', 'HPKE_v1', 'shared_secret', gx, 'g'^~y>, '32'),
+                                    <'HPKE_v1', 'secret', 'blank'>),
+                            <'32', 'HPKE_v1', 'base_nonce', '0x01', 
+                             Extract('blank', <'HPKE_v1', 'info_hash', 'request'>)>,
+                            '32'),
+                     <~key_id, $kdf_id, $aead_id>, request)
+           ) @ #vk.10 )
+      case C_QueryGeneration
+      by contradiction /* from formulas */
+    next
+      case P_HandleQuery
+      by contradiction /* from formulas */
+    next
+      case c_aead
+      by contradiction /* from formulas */
+    qed
+  next
+    case P_HandleQuery
+    solve( !KU( aead(Expand(Extract('blank',
+                                    <'HPKE_v1', 'eae_prk', z>),
+                            <'32', 'HPKE_v1', 'shared_secret', gx, 'g'^~y>, '32'),
+                     Expand(Extract(Expand(Extract('blank', <'HPKE_v1', 'eae_prk', z>),
+                                           <'32', 'HPKE_v1', 'shared_secret', gx, 'g'^~y>, '32'),
+                                    <'HPKE_v1', 'secret', 'blank'>),
+                            <'32', 'HPKE_v1', 'base_nonce', '0x01', 
+                             Extract('blank', <'HPKE_v1', 'info_hash', 'request'>)>,
+                            '32'),
+                     <~key_id, $kdf_id, $aead_id>, request)
+           ) @ #vk.10 )
+      case C_QueryGeneration
+      by contradiction /* from formulas */
+    next
+      case P_HandleQuery
+      by contradiction /* from formulas */
+    next
+      case c_aead
+      by contradiction /* from formulas */
+    qed
+  qed
+qed
+
+/* All well-formedness checks were successful. */
+
+end
