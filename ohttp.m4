@@ -57,19 +57,21 @@ in
   , !Pk($T, SigAlgs, gy)
   , Fr(~x)
   , Fr(~req)
+  , Fr(~cid)
   ]
 --[ Neq($P, $T)
   , CQG_sources(gx, OHTTPEBody)
   , C_SS(gx, gy, shared_secret)
+  , C_QG($C, gx, $P, ~k, $T, gy, ~cid, request)
   ]->
-  [ Out(senc(OHTTPRequest, ~k))
+  [ Out(senc(<~cid, OHTTPRequest>, ~k))
   , C_ResponseHandler(request, $C, gx, $P, ~k, $T, gy, shared_secret)
   ]
 
  
 rule P_HandleQuery:
   [ KeyExS($C, $P, ~k)
-  , In(senc(<OHTTPHeader, gx, opaque>, ~k))
+  , In(senc(<cid, <OHTTPHeader, gx, opaque>>, ~k))
   , !Pk($T, SigAlgs, gy)
   , Fr(~ptid)
   ]
@@ -106,7 +108,7 @@ in
   /* This action uniquely specifies the target completing the protcol. */
   , T_Done(~ttid)
   , T_SS(gx, gy, shared_secret)
-  , T_Answer($T, gx, gy, request, response)
+  , T_Answer(~ttid, $T, gx, gy, request, response)
   ]->
   [ Out(OHTTPResponse) ]
   
@@ -139,6 +141,27 @@ in
   ]->
   []
 
+/* This rule allows the attacker perform the RevSk action to reveal a connection handshake key. */
+rule RevSK:
+  [ KeyExI($X, $Y, ~kxy) ]
+--[ RevSk(~kxy) ]->
+  [ Out(~kxy) ]
+
+/* This rule allows the attacker to perform the RevDH action to reveal a target's key share. */
+rule RevDH:
+  [ !Ltk($A,~key_id, ~x) ]
+--[ RevDH($A, ~key_id, 'g'^~x) ]->
+  [ Out(~x) ]
+
+/* This rule allows an attacker to inject two AEAD encrypted blobs with the same key and nonce, but different plaintexts, and receive the plaintext of the left blob. 
+This is more powerful than the reality of such an attack, and thus if the protocol is secure against this more powerful attacker then we can be sure it is secure against a more realistic attacker. */
+rule NonceReuse:
+  [ In(aead(k, n, a1, p1))
+  , In(aead(k, n, a2, p2))
+  ]
+--[ Neq(p1, p2)
+  , ReuseNonce(k, n, p1, p2) ]->
+  [ Out(p1) ]
 
 lemma CQG_sources[sources]:
   "All gx op #j. PHQ(gx, op)@j
@@ -147,10 +170,61 @@ lemma CQG_sources[sources]:
   ((Ex #i. KU(gx)@i & #i < #j) &
    (Ex #i. KU(op)@i & #i < #j))"
 
+lemma aead_sources[sources]:
+  "All k n a p #j. KU(aead(k,n,a,p))@j
+==>
+  (Ex #i. KU(p)@i & #i < #j) |
+  (Ex tid T gx gy req #i. T_Answer(tid, T, gx, gy, req, p)@i & #i < #j) |
+  (Ex C gx P k T gy cid #i. C_QG(C, gx, P, k, T, gy, cid, p)@i & #i < #j)"
+
 lemma end_to_end:
   exists-trace
   "Ex req resp C gx T gy #i. C_Done(req, resp, C, gx, T, gy)@i"
 
 lemma ss_match:
   "All gx gy ss #j. T_SS(gx, gy, ss)@j ==> (Ex #i. C_SS(gx, gy, ss)@i & #i < #j) | (Ex #i. KU(ss)@i & #i < #j)"
+
+lemma secret_request[reuse]:
+  "All C gx P key T gy cid req #j #k.
+    C_QG(C, gx, P, key, T, gy, cid, req)@j &
+    KU(req)@k
+==>
+  (Ex sig_algs #i.
+    RevDH(T, sig_algs, gy)@i &
+    #i < #k)"
+
+lemma secret_response:
+  "All tid T gx gy req resp #j #k. T_Answer(tid, T, gx, gy, req, resp)@j &
+    KU(resp)@k
+  ==>
+    (Ex sig_algs #i. RevDH(T, sig_algs, gy)@i & #i < #k) |
+    (Ex #i. KU(req)@i & #i < #k)"
+
+
+lemma secret_cid[reuse]:
+  "All C gx P key T gy cid req #j #k.
+    C_QG(C, gx, P, key, T, gy, cid, req)@j &
+    KU(cid)@k
+==>
+  (Ex #i. RevSk(key)@i & #i < #k)"
+
+
+lemma request_binding:
+  "All C gx P key T gy cid req #j #k #l.
+    C_QG(C, gx, P, key, T, gy, cid, req)@j &
+    KU(req)@k &
+    KU(cid)@l
+==>
+  Ex sig_algs #h #i.
+    RevDH(T, sig_algs, gy)@h &
+    #h < #k &
+    RevSk(key)@i &
+    #i < #l"
+
+lemma consistency:
+  "All req resp C gx T gy #j. C_Done(req, resp, C, gx, T, gy)@j
+==>
+  (Ex tid #i. T_Answer(tid, T, gx, gy, req, resp)@i & #i < #j) |
+  (Ex sig_algs #i. RevDH(T, sig_algs, gy)@i & #i < #j)"
+
 end 
