@@ -1,3 +1,5 @@
+dnl Copyright (c) 2017-2021 Cloudflare, Inc.
+dnl Licensed under the BSD-3-Clause license found in the LICENSE file or at https://opensource.org/licenses/BSD-3-Clause
 changequote(<!,!>)
 changecom(<!/*!>,<!*/!>)
 
