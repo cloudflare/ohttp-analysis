@@ -1,10 +1,19 @@
 dnl Copyright (c) 2017-2021 Cloudflare, Inc.
 dnl Licensed under the BSD-3-Clause license found in the LICENSE file or at https://opensource.org/licenses/BSD-3-Clause
-define(<!SigAlgs!>,<!<key_id, kdf_id, aead_id>!>)
+define(<!SigAlgs!>,<!<key_id, kem_id, kdf_id, aead_id>!>)
 define(<!OHTTPHeader!>,<!SigAlgs!>)
-define(<!OHTTPEBody!>,<!aead(shared_secret, nonce, OHTTPHeader, request)!>)
-define(<!OHTTPRequest!>,<!<OHTTPHeader, gx, OHTTPEBody>!>)
+define(<!MessageTypeReqStr!>,<!'message_bhttp_request'!>)
+define(<!Zero!>,<!'0x00'!>)
+define(<!MessageInfo!>,<!<MessageTypeReqStr, Zero, OHTTPHeader>!>)
+define(<!EmptyStr!>,<!'blank'!>)
+define(<!SealBase!>,<!<SetupBaseS_Enc($1, $5), ContextSSeal($3, $4, SetupBaseS_KSS_Key($1, <!<!$2!>!>, $5), SetupBaseS_KSS_Base_Nonce($1, <!$2!>, $5))>!>)
+define(<!OHTTPEBody!>,<!seal(key, nonce, MessageInfo, request)!>)
+define(<!OHTTPRequestEnc!>, <!SealBase_Enc(gy, x)!>)
+define(<!OHTTPRequestS!>,<!<OHTTPHeader, OHTTPRequestEnc, OHTTPEBody>!>)
+define(<!OHTTPRequestR!>,<!<OHTTPHeader, gx, seal(ckey, cnonce, aad, request)>!>)
 
+define(<!MessageTypeRespStr!>, <!'message_bhttp_response'!>)
 define(<!OHTTPResponseSalt!>,<!<enc, response_nonce>!>)
-define(<!OHTTPRespEBody!>,<!aead(aead_secret, aead_nonce, 'blank', response)!>)
+define(<!OHTTPRespEBody!>,<!seal(aead_key, aead_nonce, EmptyStr, response)!>)
 define(<!OHTTPResponse!>,<!<response_nonce, OHTTPRespEBody>!>)
+define(<!NonceStr!>,<!'nonce'!>)
