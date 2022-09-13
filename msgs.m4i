@@ -2,7 +2,7 @@ dnl Copyright (c) 2017-2021 Cloudflare, Inc.
 dnl Licensed under the BSD-3-Clause license found in the LICENSE file or at https://opensource.org/licenses/BSD-3-Clause
 define(<!SigAlgs!>,<!<key_id, kem_id, kdf_id, aead_id>!>)
 define(<!OHTTPHeader!>,<!SigAlgs!>)
-define(<!MessageTypeReqStr!>,<!'message_bhttp_request'!>)
+define(<!MessageTypeReqStr!>,<!'message_ohttp_req'!>)
 define(<!Zero!>,<!'0x00'!>)
 define(<!MessageInfo!>,<!<MessageTypeReqStr, Zero, OHTTPHeader>!>)
 define(<!EmptyStr!>,<!'blank'!>)
@@ -12,7 +12,7 @@ define(<!OHTTPRequestEnc!>, <!SealBase_Enc(gy, x)!>)
 define(<!OHTTPRequestS!>,<!<OHTTPHeader, OHTTPRequestEnc, OHTTPEBody>!>)
 define(<!OHTTPRequestR!>,<!<OHTTPHeader, gx, seal(ckey, cnonce, aad, request)>!>)
 
-define(<!MessageTypeRespStr!>, <!'message_bhttp_response'!>)
+define(<!MessageTypeRespStr!>, <!'message_ohttp_res'!>)
 define(<!OHTTPResponseSalt!>,<!<enc, response_nonce>!>)
 define(<!OHTTPRespEBody!>,<!seal(aead_key, aead_nonce, EmptyStr, response)!>)
 define(<!OHTTPResponse!>,<!<response_nonce, OHTTPRespEBody>!>)
