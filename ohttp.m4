@@ -10,16 +10,14 @@ theory OHTTP begin
 
 builtins: diffie-hellman, hashing, symmetric-encryption, signing
 
-functions: Expand/3, Extract/2, hmac/1, aead/4, decrypt/3, aead_verify/4
+functions: Expand/3, Extract/2, hmac/1, seal/4, open/4
 
 restriction Eq_check_succeed: "All x y #i. Eq(x,y) @ i ==> x = y"
 restriction Neq_check_succeed: "All x y #i. Neq(x,y) @ i ==> not (x = y)"
+restriction VerifyPSKInputs_succeed: "All mode psk psk_id #i. VerifyPSKInputs(mode, psk, psk_id)@i ==> (((psk = DefaultPSK) & (psk_id = DefaultPSKID)) & mode = ModeBase) | ((not(psk = DefaultPSK) & not(psk_id = DefaultPSKID)) & mode = ModePSK)"
 
-
-/* The plaintext can be recovered with the key */
-equations: decrypt(k, n, aead(k, n, a, p)) = p
-/* The authentication can be checked with the key and AAD */
-equations: aead_verify(k, n, a, aead(k, n, a, p)) = true
+/* One shot aead property */
+equations: open(k, n, a, seal(k, n, a, p)) = p
 
 /* The Starter rule establishes an authentic shared key between two actors, and produces the KeyExI Fact, which the attacker can use to compromise said key. */
 rule Starter:
@@ -36,25 +34,21 @@ rule Generate_DH_key_pair:
   , Fr(~key_id)
   ]
 -->
-  [ !Pk($A, <~key_id, $kdf_id, $aead_id>, 'g'^~x)
+  [ !Pk($A, <~key_id, $kem_id, $kdf_id, $aead_id>, 'g'^~x)
   , Out(<~key_id, 'g'^~x>)
-  , !Ltk($A,<~key_id,$kdf_id, $aead_id>, ~x)
+  , !Ltk($A, <~key_id, $kem_id, $kdf_id, $aead_id>, ~x)
   ]
 
 /* The C_QueryGeneration rule simulates a client constructing a fresh request and sending it to the proxy */
 rule C_QueryGeneration:
 let
+  x = ~x
   gx = 'g'^~x
-  kem_context = <gx, gy>
-  dh = gy^~x
-
-  shared_secret = ExtractAndExpand(dh, kem_context)
-  info_hash = Labeled_Extract('blank', 'info_hash', 'request')
-
-  nonce = KSNonce(shared_secret)
   key_id = ~key_id
   request = ~req
-  
+  shared_secret = Encap_SS(gy, x)
+  key = KeyScheduleS_Key(ModeBase, shared_secret, <!MessageInfo!>, DefaultPSK, DefaultPSKID)
+  nonce = KeyScheduleS_Base_Nonce(ModeBase, shared_secret, <!MessageInfo!>, DefaultPSK, DefaultPSKID)
 in
   [ KeyExC($C, $P, ~k)
   , !Pk($T, SigAlgs, gy)
@@ -63,21 +57,23 @@ in
     /* The ~cid, or connection id, represents the unique channel between the client and the proxy. */
   , Fr(~cid)
   ]
---[ /* The proxy and the target may not be the same entity. */ 
+--[ /* The proxy and the target may not be the same entity. */
     Neq($P, $T)
-    /* This marks the source of the client's public key and the encrypted message. This allows Tamarin to reason about their construction. */
-  , CQG_sources(gx, OHTTPEBody)
+  , MsgSource(senc(<~cid, OHTTPRequestS>, ~k), ~k, OHTTPRequestS)
+  , SealSources(OHTTPEBody)
   , C_SS(gx, gy, shared_secret)
     /* C_QG signifies that the client successfully completed the request. */
   , C_QG($C, gx, $P, ~k, $T, gy, ~cid, request)
+    /* This doesn't actually check anything. Inputs need to be from the message. */
+  , VerifyPSKInputs(ModeBase, DefaultPSK, DefaultPSKID)
   ]->
   [ /* The ~cid is sent on the same encrypted channel as the OHTTP request. If the attacker can learn this value it means the channel has been compromised. */
-    Out(senc(<~cid, OHTTPRequest>, ~k))
+    Out(senc(<~cid, OHTTPRequestS>, ~k))
     /* C_ResponseHandler stores all the state the client needs to handle the response. */
-  , C_ResponseHandler(request, $C, gx, $P, ~k, $T, gy, shared_secret)
+  , C_ResponseHandler(request, $C, gx, $P, ~k, $T, gy, shared_secret, MessageInfo)
   ]
 
-/* The P_HandleQuery rule simulates a proxy forwarding a request from a client to a target. We assume that the link between the proxy and the target is unencrypted. This is a fault-preserving simplification. */ 
+/* The P_HandleQuery rule simulates a proxy forwarding a request from a client to a target. We assume that the link between the proxy and the target is unencrypted. This is a fault-preserving simplification. */
 rule P_HandleQuery:
   [ KeyExS($C, $P, ~k)
   , In(senc(<cid, <OHTTPHeader, gx, opaque>>, ~k))
@@ -85,9 +81,9 @@ rule P_HandleQuery:
   , !Pk($T, SigAlgs, gy)
   , Fr(~ptid)
   ]
---[ /* The PHQ action is linked to the CQG_Sources action. Using a sources lemma, we can tell Tamarin that if there is a PHQ action then either the
-       attacker constructed the reqeuest, or an honest client did. */
-    PHQ(gx, opaque)
+--[ /* The PHQ action is linked to the MsgSources action. Using a sources lemma, we can tell Tamarin that if there is a PHQ action then either the
+       attacker constructed the reqeuest, or an honest actor did. */
+    PHQ(senc(<cid, <OHTTPHeader, gx, opaque>>, ~k), gx, <OHTTPHeader, gx, opaque>)
   ]->
   [ /* The ~cid is stripped and the target's identity is added. */
     Out(<$T, <OHTTPHeader, gx, opaque>>)
@@ -100,68 +96,70 @@ rule T_HandleQuery:
 let
   key_id = ~key_id
   gy = 'g'^~y
+  shared_secret = Decap(gx, ~y)
+  key = KeyScheduleR_Key(ModeBase, shared_secret, <!<!MessageInfo!>!>, DefaultPSK, DefaultPSKID)
+  nonce = KeyScheduleR_Base_Nonce(ModeBase, shared_secret, <!<!MessageInfo!>!>, DefaultPSK, DefaultPSKID)
+  exporter_secret = KeyScheduleR_Exporter_Secret(ModeBase, shared_secret, <!<!MessageInfo!>!>, DefaultPSK, DefaultPSKID)
 
-  kem_context = <gx, gy>
-  dh = gx^~y
 
-  shared_secret = ExtractAndExpand(dh, kem_context)
-  info_hash = Labeled_Extract('blank', 'info_hash', 'request')
+  msg = ContextROpen(<!MessageInfo!>, seal(ckey, cnonce, aad, request), key, nonce)
 
-  nonce = KSNonce(shared_secret) 
-  response_nonce = ~resp_nonce
-  salt = <shared_secret, response_nonce>
-  aead_secret = DeriveSecretsK(salt, request) 
-  aead_nonce = DeriveSecretsN(salt, request)
-
-  expected_aad = OHTTPHeader 
   response = ~resp
+  response_nonce = ~resp_nonce
+
+  secret = ContextExport(MessageTypeRespStr, Nk, exporter_secret)
+  prk = Extract(<!<gx, ~resp_nonce>!>, secret)
+  aead_key = Expand(prk, KeyStr, Nk)
+  aead_nonce = Expand(prk, NonceStr, Nn)
+  ct = seal(aead_key, aead_nonce, EmptyStr, response)
 in
-  [ In(<$T, OHTTPRequest>)
+  [ In(<$T, OHTTPRequestR>)
   , !Ltk($T, SigAlgs, ~y)
   , Fr(~ttid)
   , Fr(~resp)
   , Fr(~resp_nonce)
   ]
---[ /* This action ensures that the message decrypts correctly. 
-       This requirement is also enforced by the rule's pattern matching, but we make it explicit here. */
-    Eq(aead_verify(shared_secret, nonce, expected_aad, OHTTPEBody), true) 
+--[ /* This action ensures that the message decrypts correctly. */
+    Eq(msg, request)
     /* This action uniquely specifies the target completing the protcol. */
   , T_Done(~ttid)
   , T_SS(gx, gy, shared_secret)
   , T_Answer(~ttid, $T, gx, gy, request, response)
+  , VerifyPSKInputs(ModeBase, DefaultPSK, DefaultPSKID)
+  , SealSources(OHTTPRespEBody)
   ]->
   [ Out(OHTTPResponse) ]
-  
+
 /* The P_HandleResponse rule simulates a proxy receiving a response and forwarding it to the client. */
 rule P_HandleResponse:
   [ /* The proxy consumes its previous state. */
-    P_ResponseHandler(~ptid, $C, $P, ~k) 
+    P_ResponseHandler(~ptid, $C, $P, ~k)
   , In(<nonce, opaque>)
   ]
 --[ /* This actions uniquely specifies the proxy completing the protocol. */
-    P_Done(~ptid) 
+    P_Done(~ptid)
+  , MsgSource(senc(<nonce, opaque>, ~k), ~k, opaque)
   ]->
   [ Out(senc(<nonce, opaque>, ~k)) ]
 
-/* The C_HandleResponse rule simulates a client receiving a response. 
+/* The C_HandleResponse rule simulates a client receiving a response.
    As we are only examining the security of OHTTP here we simply parse the response and drop it. */
 rule C_HandleResponse:
 let
   request = ~request
-  info_hash = Labeled_Extract('blank', 'info_hash', 'request')
-  salt = <shared_secret, response_nonce>
-
-  aead_secret = DeriveSecretsK(salt, request) 
-  aead_nonce = DeriveSecretsN(salt, request)
+  secret = ContextExport(MessageTypeRespStr, Nk, KeyScheduleS_Exporter_Secret(ModeBase, shared_secret, <!MessageInfo!>, DefaultPSK, DefaultPSKID))
+  prk = Extract(<!<gx, response_nonce>!>, secret)
+  caead_key = Expand(prk, KeyStr, Nk)
+  caead_nonce = Expand(prk, NonceStr, Nn)
+  msg = open(caead_key, caead_nonce, EmptyStr, OHTTPRespEBody)
 in
   [ /* The client consumes its previous state. */
-    C_ResponseHandler(request, $C, gx, $P, ~k,  $T, gy, shared_secret) 
+    C_ResponseHandler(request, $C, gx, $P, ~k,  $T, gy, shared_secret, MessageInfo)
   , In(senc(OHTTPResponse, ~k)) ]
 --[ /* This action uniquely specifies the client completing the protcol. */
     C_Done(~request, response, $C, gx,  $T, gy)
-    /* This action ensures that the message decrypts correctly. 
-       This requirement is also enforced by the rule's pattern matching, but we make it explicit here. */
-  , Eq(aead_verify(aead_secret, aead_nonce, 'blank', OHTTPRespEBody), true)
+    /* This action ensures that the message decrypts correctly. */
+  , Eq(msg, response)
   ]->
   []
 
@@ -177,39 +175,55 @@ rule RevDH:
 --[ RevDH($A, ~key_id, 'g'^~x) ]->
   [ Out(~x) ]
 
-/* This rule allows an attacker to inject two AEAD encrypted blobs with the same key and nonce, but different plaintexts, and receive the plaintext of the left blob. 
+/* This rule allows an attacker to inject two AEAD encrypted blobs with the same key and nonce, but different plaintexts, and receive the plaintext of the left blob.
 This is more powerful than the reality of such an attack, and thus if the protocol is secure against this more powerful attacker then we can be sure it is secure against a more realistic attacker. */
 rule NonceReuse:
-  [ In(aead(k, n, a1, p1))
-  , In(aead(k, n, a2, p2))
+  [ In(seal(k, n, a1, p1))
+  , In(seal(k, n, a2, p2))
   ]
 --[ Neq(p1, p2)
+  , NonceReuse(seal(k, n, a1, p1), p1)
   , ReuseNonce(k, n, p1, p2) ]->
   [ Out(p1) ]
 
-/* This lemma is used by Tamarin's preprocessor to refine the outputs of the P_HandleQuery rule. 
-   It can understood as "Either the inputs to the P_HandleQuery rule are from an honest client, or the attacker knew them before the rule was triggered." */
-lemma CQG_sources[sources]:
-  "All gx op #j. PHQ(gx, op)@j
-==>
-  (Ex #i. CQG_sources(gx, op)@i & #i < #j) |
-  ((Ex #i. KU(gx)@i & #i < #j) &
-   (Ex #i. KU(op)@i & #i < #j))"
 
-/* This lemma is used by Tamarin's preprocessor to refine sources of AEADs.
-   It can be understood as "Either the attacker knows the plaintext of the AEAD, or it was generated honestly by either the target or the client." */
-lemma aead_sources[sources]:
-  "All k n a p #j. KU(aead(k,n,a,p))@j
-==>
-  (Ex #i. KU(p)@i & #i < #j) |
-  (Ex tid T gx gy req #i. T_Answer(tid, T, gx, gy, req, p)@i & #i < #j) |
-  (Ex C gx P k T gy cid #i. C_QG(C, gx, P, k, T, gy, cid, p)@i & #i < #j)"
+lemma MsgSources[sources]:
+  "(
+    All nonce msg k gx #j.
+      PHQ(senc(<nonce, msg>, k), gx, msg)@j
+    ==>
+      (Ex #i .
+          MsgSource(senc(<nonce, msg>,k), k, msg)@i
+        & #i < #j)
+      |
+      ((Ex #i #h.
+          KU(gx)@h
+        & #h < #j
+        & KU(msg)@i
+        & #i < #j))
+  )
+  &
+  (
+    All k n a p #j. NonceReuse(seal(k,n,a,p),p)@j
+    ==>
+      (Ex #i .
+          SealSources(seal(k,n,a,p))@i
+        & #i < #j)
+      |
+      (Ex #i .
+          KU(p)@i
+        & #i < #j)
+  )
+  "
+
+
 
 /* This lemma is an existance lemma, and checks that it is possible for the protocol to complete.
    This reduces the risk that the model is satisfied trivially, because some bug renders it unable to run. */
 lemma end_to_end:
   exists-trace
   "Ex req resp C gx T gy #i. C_Done(req, resp, C, gx, T, gy)@i"
+
 
 /* This lemma states that if a target responds to a request then either it has derived the same shared secret, ss, as the client, or the attacker knew ss before the request arrived. */
 lemma ss_match:
@@ -256,10 +270,10 @@ lemma request_binding:
     RevSk(key)@i &
     #i < #l"
 
-/* This lemma states that if the client and target both complete the protocol then either they agree on 
-      the target's identity, 
-      the DH key shares, 
-      the request, and 
+/* This lemma states that if the client and target both complete the protocol then either they agree on
+      the target's identity,
+      the DH key shares,
+      the request, and
       the response,
    or the attacker previously compromised the target. */
 lemma consistency:
@@ -268,4 +282,13 @@ lemma consistency:
   (Ex tid #i. T_Answer(tid, T, gx, gy, req, resp)@i & #i < #j) |
   (Ex sig_algs #i. RevDH(T, sig_algs, gy)@i & #i < #j)"
 
-end 
+/* This lemma states that there is no way to have a Target produce two distinct
+    responses with the same AEAD key and nonce */
+lemma reach_nonce_reuse:
+  "All ttid T gx gy query answer key n a #j #k.
+    T_Answer(ttid, T, gx, gy, query, answer)@j &
+    ReuseNonce(key, n, a, answer)@k ==>
+  (Ex kid #i. RevDH(T, kid, gy)@i & #i < #k) |
+  (Ex #i. KU(query)@i & #i < #k)"
+
+end
