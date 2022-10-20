@@ -38,7 +38,7 @@ tamarin-prover interactive proofs/
 You can verify the proofs non-interactively by running:
 
 ```bash
-$ tamarin-prover --prove=end_to_end OHTTP.spthy
+$ tamarin-prover --prove proofs/OHTTP.spthy
 [...]
 ==============================================================================
 summary of summaries:
