@@ -1,13 +1,11 @@
-%.spthy: %.m4
-	m4 $< > $@
+Q     := @
+SPTHY := ohttp.spthy
 
-.PHONY: all
-all: ohttp.spthy 
+.PHONY: all proofs clean
+all: $(SPTHY)
 
-.PHONY: proofs
-proofs:
-	tamarin-prover proofs/*
+proofs: ; $Qtamarin-prover proofs/*
 
-.PHONY: clean
-clean:
-	rm ohttp.spthy
+clean:  ; $Qrm -f $(SPTHY)
+
+%.spthy: %.m4 ; $Qm4 $< > $@
